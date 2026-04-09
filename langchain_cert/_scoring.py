@@ -125,9 +125,10 @@ def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray
         if norm > 1e-8:
             displacements.append(delta / norm)
 
-    mu = np.mean(displacements, axis=0)
+    mu: np.ndarray = np.mean(displacements, axis=0)
     mu_norm = float(np.linalg.norm(mu))
-    return mu / mu_norm if mu_norm > 1e-8 else mu
+    result: np.ndarray = mu / mu_norm if mu_norm > 1e-8 else mu
+    return result
 
 
 def _get_mu_hat(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
