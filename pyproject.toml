@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-cert"
+dynamic = ["version"]
+description = "CERT hallucination detection for LangChain and LangSmith — embedding geometry, no second LLM"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Javier Marin", email = "info@cert-framework.com"}
+]
+keywords = [
+    "langchain", "langsmith", "hallucination-detection",
+    "llm-evaluation", "grounding", "rag", "ai-safety",
+    "embedding-geometry", "sgi", "dgi",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# Core dependency: only langsmith. Scoring is optional.
+dependencies = [
+    "langsmith>=0.1.0,<0.3.0",
+]
+
+[project.optional-dependencies]
+# Local geometric scoring (SGI + DGI without network calls)
+local = [
+    "sentence-transformers>=2.7.0,<4.0.0",
+    "numpy>=1.21.0",
+]
+# Log traces to CERT dashboard for async evaluation
+dashboard = [
+    "cert-sdk>=0.4.0",
+]
+# Everything
+all = [
+    "sentence-transformers>=2.7.0,<4.0.0",
+    "numpy>=1.21.0",
+    "cert-sdk>=0.4.0",
+]
+# Development
+dev = [
+    "pytest>=7.0",
+    "pytest-mock>=3.0",
+    "sentence-transformers>=2.7.0",
+    "numpy>=1.21.0",
+    "langchain>=0.3.0",
+    "langchain-openai",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage      = "https://cert-framework.com"
+Repository    = "https://github.com/Javihaus/cert-langchain"
+Documentation = "https://cert-framework.com/docs/integrations/langchain"
+"Research (SGI)" = "https://arxiv.org/abs/2512.13771"
+"Research (DGI)" = "https://arxiv.org/abs/2602.13224"
+
+[tool.setuptools.dynamic]
+version = {attr = "langchain_cert._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["langchain_cert*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
