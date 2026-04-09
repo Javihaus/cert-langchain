@@ -96,3 +96,6 @@ follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+langchain_cert = ["data/*.csv"]
