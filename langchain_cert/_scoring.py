@@ -57,8 +57,51 @@ def _get_encoder(model_name: str = _DEFAULT_MODEL) -> Any:
 
 
 # ── DGI reference direction ───────────────────────────────────────────────────
-def _load_reference_pairs() -> list[tuple[str, str]]:
-    """Load grounded (question, response) pairs from bundled CSV."""
+
+def _load_reference_pairs(
+    reference_csv: Optional[str] = None,
+) -> list[tuple[str, str]]:
+    """
+    Load grounded (question, response) pairs for DGI calibration.
+
+    Two sources:
+    - Bundled dataset (default): loaded from langchain_cert/data/reference_pairs.csv
+      using importlib.resources. Contains finance and medical domain pairs from
+      Claude and Gemini responses.
+    - User-provided CSV (reference_csv parameter): simple two-column format.
+      See format requirements below.
+
+    User CSV format:
+        - Comma OR semicolon delimited (auto-detected)
+        - Required columns: "question" and one of "response", "answer", or "output"
+        - Header row required
+        - Encoding: UTF-8
+        - Each row should be a verified grounded (question, response) pair.
+          Do NOT include hallucinated responses — they will degrade calibration.
+
+    Example user CSV:
+        question,response
+        What is our refund policy?,Refunds are processed within 5 business days.
+        How do I reset my password?,Navigate to Settings > Security > Reset Password.
+
+    Args:
+        reference_csv: Path to a user-provided CSV file. If None, loads the
+                       bundled dataset.
+
+    Returns:
+        List of (question, response) string tuples.
+
+    Raises:
+        FileNotFoundError: If reference_csv path does not exist.
+        ValueError: If the CSV is missing required columns or contains no valid rows.
+    """
+    if reference_csv is not None:
+        return _load_user_csv(reference_csv)
+    return _load_bundled_csv()
+
+
+def _load_bundled_csv() -> list[tuple[str, str]]:
+    """Load the bundled reference dataset from package data."""
     import csv
     import io
     from importlib import resources
@@ -68,28 +111,99 @@ def _load_reference_pairs() -> list[tuple[str, str]]:
     raw = ref.read_text(encoding="utf-8")
     reader = csv.DictReader(io.StringIO(raw), delimiter=";")
     for row in reader:
-        q = row["question"].strip()
-        # Use both claude and gemini answers as independent grounded samples
+        q = row.get("question", "").strip()
         for col in ("claude_answer", "gemini_answer"):
-            ans = row[col].strip()
+            ans = row.get(col, "").strip()
             if q and ans:
                 pairs.append((q, ans))
+
+    if not pairs:
+        raise ValueError(
+            "Bundled reference dataset loaded 0 pairs. "
+            "The package installation may be corrupted."
+        )
     return pairs
 
-_REFERENCE_PAIRS = _load_reference_pairs()
+
+def _load_user_csv(path: str) -> list[tuple[str, str]]:
+    """
+    Load user-provided reference CSV.
+
+    Auto-detects delimiter. Accepts 'response', 'answer', or 'output'
+    as the response column name.
+    """
+    import csv
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Reference CSV not found: {path}\n"
+            "Provide a path to a CSV file with columns: question, response"
+        )
+
+    # Auto-detect delimiter from first line
+    with p.open(encoding="utf-8") as f:
+        sample = f.read(1024)
+
+    delimiter = ";" if sample.count(";") > sample.count(",") else ","
+
+    pairs: list[tuple[str, str]] = []
+    with p.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter=delimiter)
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV file appears empty: {path}")
+
+        # Find the response column — accept multiple names
+        response_col = None
+        for candidate in ("response", "answer", "output"):
+            if candidate in (reader.fieldnames or []):
+                response_col = candidate
+                break
+
+        if "question" not in (reader.fieldnames or []):
+            raise ValueError(
+                f"CSV missing required 'question' column. "
+                f"Found columns: {list(reader.fieldnames or [])}"
+            )
+        if response_col is None:
+            raise ValueError(
+                f"CSV missing response column. "
+                f"Expected one of: 'response', 'answer', 'output'. "
+                f"Found columns: {list(reader.fieldnames or [])}"
+            )
+
+        for row in reader:
+            q = row.get("question", "").strip()
+            ans = row.get(response_col, "").strip()
+            if q and ans:
+                pairs.append((q, ans))
+
+    if not pairs:
+        raise ValueError(
+            f"No valid pairs loaded from {path}. "
+            "Check that question and response columns contain data."
+        )
+
+    logger.info("Loaded %d reference pairs from %s.", len(pairs), path)
+    return pairs
 
 
-def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
-    """Compute DGI reference direction from grounded pairs."""
+def _compute_reference_direction_from_pairs(
+    pairs: list[tuple[str, str]],
+    model_name: str = _DEFAULT_MODEL,
+) -> np.ndarray:
+    """Compute DGI reference direction (mu_hat) from grounded pairs."""
     encoder = _get_encoder(model_name)
-    texts = []
-    for q, r in _REFERENCE_PAIRS:
+
+    texts: list[str] = []
+    for q, r in pairs:
         texts.extend([q, r])
 
     embs = encoder.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
 
     displacements = []
-    for i in range(len(_REFERENCE_PAIRS)):
+    for i in range(len(pairs)):
         q_emb = embs[i * 2]
         r_emb = embs[i * 2 + 1]
         delta = r_emb - q_emb
@@ -103,19 +217,37 @@ def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray
     return result
 
 
-_mu_hat: dict[str, np.ndarray] = {}
+_mu_hat: dict[tuple[str, str], np.ndarray] = {}
 
 
-def _get_mu_hat(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
-    """Get DGI reference direction, computing once per model."""
-    if model_name not in _mu_hat:
-        logger.info("Computing DGI reference direction for %s...", model_name)
-        _mu_hat[model_name] = _compute_reference_direction(model_name)
+def _get_mu_hat(
+    model_name: str = _DEFAULT_MODEL,
+    reference_csv: Optional[str] = None,
+) -> np.ndarray:
+    """
+    Get DGI reference direction.
+
+    Computes once per (model_name, reference_csv) pair and caches.
+    Using different reference_csv paths in the same process produces
+    independent reference directions — no cache collisions.
+    """
+    cache_key = (model_name, reference_csv or "bundled")
+    if cache_key not in _mu_hat:
         logger.info(
-            "DGI reference direction ready (dims=%d).",
-            _mu_hat[model_name].shape[0],
+            "Computing DGI reference direction (model=%s, data=%s)...",
+            model_name,
+            reference_csv or "bundled",
         )
-    return _mu_hat[model_name]
+        pairs = _load_reference_pairs(reference_csv)
+        _mu_hat[cache_key] = _compute_reference_direction_from_pairs(
+            pairs, model_name
+        )
+        logger.info(
+            "DGI reference direction ready (dims=%d, pairs=%d).",
+            _mu_hat[cache_key].shape[0],
+            len(pairs),
+        )
+    return _mu_hat[cache_key]
 
 
 # ── Result types ──────────────────────────────────────────────────────────────
@@ -210,6 +342,7 @@ def compute_dgi(
     question: str,
     response: str,
     model_name: str = _DEFAULT_MODEL,
+    reference_csv: Optional[str] = None,
 ) -> DGIResult:
     """
     Compute Directional Grounding Index.
@@ -221,15 +354,18 @@ def compute_dgi(
     Higher DGI = displacement matches grounded patterns = likely grounded.
 
     Args:
-        question:   The input query.
-        response:   The LLM's response to evaluate.
-        model_name: Sentence transformer model.
+        question:      The input query.
+        response:      The LLM's response to evaluate.
+        model_name:    Sentence transformer model.
+        reference_csv: Path to a user-provided CSV for DGI calibration.
+                       If None, uses the bundled domain-specific dataset.
+                       See _load_reference_pairs() for CSV format.
 
     Returns:
         DGIResult with raw score, normalized score, and flag.
     """
     encoder = _get_encoder(model_name)
-    mu_hat = _get_mu_hat(model_name)
+    mu_hat = _get_mu_hat(model_name, reference_csv)
 
     embs = encoder.encode(
         [question, response],
