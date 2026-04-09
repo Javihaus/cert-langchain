@@ -57,52 +57,25 @@ def _get_encoder(model_name: str = _DEFAULT_MODEL) -> Any:
 
 
 # ── DGI reference direction ───────────────────────────────────────────────────
-# Computed at module import from known-grounded pairs spanning multiple domains.
-# This implements generic calibration (AUROC ~0.70 at this scale).
-# Domain-specific calibration via CERT dashboard achieves AUROC 0.90+.
+def _load_reference_pairs() -> list[tuple[str, str]]:
+    """Load grounded (question, response) pairs from bundled CSV."""
+    import csv
+    from importlib import resources
 
-_REFERENCE_PAIRS = [
-    (
-        "What is photosynthesis?",
-        "Photosynthesis converts sunlight, water, and CO2 into glucose and "
-        "oxygen using chlorophyll in plant cells.",
-    ),
-    (
-        "What causes lightning?",
-        "Lightning results from electrical discharge between oppositely charged "
-        "regions in storm clouds or between clouds and ground.",
-    ),
-    (
-        "How does the immune system work?",
-        "The immune system uses white blood cells, antibodies, and the lymphatic "
-        "system to identify and neutralize pathogens.",
-    ),
-    (
-        "What is the water cycle?",
-        "Water evaporates from surfaces, condenses into clouds, and falls as "
-        "precipitation, continuously recycling through the atmosphere.",
-    ),
-    (
-        "What is compound interest?",
-        "Compound interest accrues on both the principal and accumulated interest, "
-        "producing exponential growth over time.",
-    ),
-    (
-        "How do vaccines work?",
-        "Vaccines expose the immune system to weakened or inactivated pathogens, "
-        "training it to recognize and fight future infections.",
-    ),
-    (
-        "What is supply and demand?",
-        "Supply and demand describes how product availability and consumer desire "
-        "together determine market price.",
-    ),
-    (
-        "What is DNA?",
-        "DNA is a double-helix molecule encoding genetic instructions for organism "
-        "development, function, and reproduction.",
-    ),
-]
+    pairs = []
+    ref = resources.files("langchain_cert.data").joinpath("reference_pairs.csv")
+    with ref.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter=";")
+        for row in reader:
+            q = row["question"].strip()
+            # Use both claude and gemini answers as independent grounded samples
+            for col in ("claude_answer", "gemini_answer"):
+                ans = row[col].strip()
+                if q and ans:
+                    pairs.append((q, ans))
+    return pairs
+
+_REFERENCE_PAIRS = _load_reference_pairs()
 
 _mu_hat: Optional[np.ndarray] = None
 
@@ -131,14 +104,19 @@ def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray
     return result
 
 
+_mu_hat: dict[str, np.ndarray] = {}
+
+
 def _get_mu_hat(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
     """Get DGI reference direction, computing once per model."""
-    global _mu_hat
-    if _mu_hat is None:
-        logger.info("Computing DGI reference direction...")
-        _mu_hat = _compute_reference_direction(model_name)
-        logger.info("DGI reference direction ready (dims=%d).", _mu_hat.shape[0])
-    return _mu_hat
+    if model_name not in _mu_hat:
+        logger.info("Computing DGI reference direction for %s...", model_name)
+        _mu_hat[model_name] = _compute_reference_direction(model_name)
+        logger.info(
+            "DGI reference direction ready (dims=%d).",
+            _mu_hat[model_name].shape[0],
+        )
+    return _mu_hat[model_name]
 
 
 # ── Result types ──────────────────────────────────────────────────────────────
