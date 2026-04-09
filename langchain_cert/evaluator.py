@@ -55,6 +55,13 @@ class CERTGroundingEvaluator:
                        (the review threshold from arXiv:2512.13771).
         model_name:    Sentence transformer model for local scoring.
         dashboard_url: Override for self-hosted CERT deployments.
+        reference_csv: Path to a CSV of verified grounded (question, response)
+                       pairs for DGI calibration. Overrides the bundled dataset.
+                       Generic calibration (bundled) achieves AUROC ~0.76.
+                       Domain-specific calibration typically reaches 0.90+.
+                       CSV format: header row with "question" and "response"
+                       columns, comma or semicolon delimited.
+                       If None, the bundled finance + medical dataset is used.
 
     Thresholds reference (raw scores):
         SGI >= 1.20  : strong context engagement (green)
@@ -73,12 +80,14 @@ class CERTGroundingEvaluator:
         threshold: float = 0.45,
         model_name: str = "all-MiniLM-L6-v2",
         dashboard_url: str = "https://cert-framework.com",
+        reference_csv: Optional[str] = None,
     ) -> None:
         self.api_key       = api_key
         self.project       = project
         self.threshold     = threshold
         self.model_name    = model_name
         self.dashboard_url = dashboard_url
+        self.reference_csv = reference_csv
         self._client       = None
 
     # ── LangSmith RunEvaluator protocol ──────────────────────────────────────
@@ -152,6 +161,7 @@ class CERTGroundingEvaluator:
                 question=input_text,
                 response=output_text,
                 model_name=self.model_name,
+                reference_csv=self.reference_csv,
             )
             method_desc = f"DGI={result.raw_score:.3f} (flag<{DGI_PASS})"
             score = result.normalized
