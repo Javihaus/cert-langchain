@@ -60,24 +60,23 @@ def _get_encoder(model_name: str = _DEFAULT_MODEL) -> Any:
 def _load_reference_pairs() -> list[tuple[str, str]]:
     """Load grounded (question, response) pairs from bundled CSV."""
     import csv
+    import io
     from importlib import resources
 
-    pairs = []
+    pairs: list[tuple[str, str]] = []
     ref = resources.files("langchain_cert.data").joinpath("reference_pairs.csv")
-    with ref.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            q = row["question"].strip()
-            # Use both claude and gemini answers as independent grounded samples
-            for col in ("claude_answer", "gemini_answer"):
-                ans = row[col].strip()
-                if q and ans:
-                    pairs.append((q, ans))
+    raw = ref.read_text(encoding="utf-8")
+    reader = csv.DictReader(io.StringIO(raw), delimiter=";")
+    for row in reader:
+        q = row["question"].strip()
+        # Use both claude and gemini answers as independent grounded samples
+        for col in ("claude_answer", "gemini_answer"):
+            ans = row[col].strip()
+            if q and ans:
+                pairs.append((q, ans))
     return pairs
 
 _REFERENCE_PAIRS = _load_reference_pairs()
-
-_mu_hat: Optional[np.ndarray] = None
 
 
 def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
