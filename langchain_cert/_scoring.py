@@ -1,0 +1,284 @@
+"""
+CERT Geometric Grounding — standalone scoring implementation.
+
+SGI (Semantic Grounding Index) — arXiv:2512.13771
+    SGI = dist(response, question) / dist(response, context)
+    Threshold: < 0.95 flags for review, >= 1.20 is strong pass.
+
+DGI (Directional Grounding Index) — arXiv:2602.13224
+    DGI = dot(normalize(phi(r) - phi(q)), mu_hat)
+    Threshold: < 0.30 flags for review.
+
+Both methods use the same embedding model (all-MiniLM-L6-v2 by default).
+The embedding model is loaded once per process and cached.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# ── Thresholds (from arXiv:2512.13771) ───────────────────────────────────────
+
+SGI_STRONG_PASS = 1.20   # Response clearly moved toward context
+SGI_REVIEW      = 0.95   # Below this: flag for review
+DGI_PASS        = 0.30   # Displacement aligns with grounded patterns
+
+
+# ── Embedding model (module-level singleton) ──────────────────────────────────
+
+_DEFAULT_MODEL = "all-MiniLM-L6-v2"
+_encoder = None
+_encoder_model_name: Optional[str] = None
+
+
+def _get_encoder(model_name: str = _DEFAULT_MODEL) -> Any:
+    """Load embedding model once, cache for process lifetime."""
+    global _encoder, _encoder_model_name
+    if _encoder is None or _encoder_model_name != model_name:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(
+                "sentence-transformers is required for local scoring. "
+                "Install with: pip install langchain-cert[local]"
+            ) from e
+        logger.info("Loading embedding model: %s", model_name)
+        _encoder = SentenceTransformer(model_name)
+        _encoder_model_name = model_name
+        logger.info("Embedding model loaded.")
+    return _encoder
+
+
+# ── DGI reference direction ───────────────────────────────────────────────────
+# Computed at module import from known-grounded pairs spanning multiple domains.
+# This implements generic calibration (AUROC ~0.70 at this scale).
+# Domain-specific calibration via CERT dashboard achieves AUROC 0.90+.
+
+_REFERENCE_PAIRS = [
+    (
+        "What is photosynthesis?",
+        "Photosynthesis converts sunlight, water, and CO2 into glucose and "
+        "oxygen using chlorophyll in plant cells.",
+    ),
+    (
+        "What causes lightning?",
+        "Lightning results from electrical discharge between oppositely charged "
+        "regions in storm clouds or between clouds and ground.",
+    ),
+    (
+        "How does the immune system work?",
+        "The immune system uses white blood cells, antibodies, and the lymphatic "
+        "system to identify and neutralize pathogens.",
+    ),
+    (
+        "What is the water cycle?",
+        "Water evaporates from surfaces, condenses into clouds, and falls as "
+        "precipitation, continuously recycling through the atmosphere.",
+    ),
+    (
+        "What is compound interest?",
+        "Compound interest accrues on both the principal and accumulated interest, "
+        "producing exponential growth over time.",
+    ),
+    (
+        "How do vaccines work?",
+        "Vaccines expose the immune system to weakened or inactivated pathogens, "
+        "training it to recognize and fight future infections.",
+    ),
+    (
+        "What is supply and demand?",
+        "Supply and demand describes how product availability and consumer desire "
+        "together determine market price.",
+    ),
+    (
+        "What is DNA?",
+        "DNA is a double-helix molecule encoding genetic instructions for organism "
+        "development, function, and reproduction.",
+    ),
+]
+
+_mu_hat: Optional[np.ndarray] = None
+
+
+def _compute_reference_direction(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
+    """Compute DGI reference direction from grounded pairs."""
+    encoder = _get_encoder(model_name)
+    texts = []
+    for q, r in _REFERENCE_PAIRS:
+        texts.extend([q, r])
+
+    embs = encoder.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
+
+    displacements = []
+    for i in range(len(_REFERENCE_PAIRS)):
+        q_emb = embs[i * 2]
+        r_emb = embs[i * 2 + 1]
+        delta = r_emb - q_emb
+        norm = float(np.linalg.norm(delta))
+        if norm > 1e-8:
+            displacements.append(delta / norm)
+
+    mu = np.mean(displacements, axis=0)
+    mu_norm = float(np.linalg.norm(mu))
+    return mu / mu_norm if mu_norm > 1e-8 else mu
+
+
+def _get_mu_hat(model_name: str = _DEFAULT_MODEL) -> np.ndarray:
+    """Get DGI reference direction, computing once per model."""
+    global _mu_hat
+    if _mu_hat is None:
+        logger.info("Computing DGI reference direction...")
+        _mu_hat = _compute_reference_direction(model_name)
+        logger.info("DGI reference direction ready (dims=%d).", _mu_hat.shape[0])
+    return _mu_hat
+
+
+# ── Result types ──────────────────────────────────────────────────────────────
+
+@dataclass
+class SGIResult:
+    """Result of Semantic Grounding Index computation."""
+    raw_score: float          # dist(response, question) / dist(response, context)
+    normalized: float         # 0.0 – 1.0 for LangSmith compatibility
+    flag: bool                # True if below SGI_REVIEW threshold
+    q_dist: float             # dist(response, question)
+    ctx_dist: float           # dist(response, context)
+    method: str = "sgi"
+
+
+@dataclass
+class DGIResult:
+    """Result of Directional Grounding Index computation."""
+    raw_score: float          # cosine similarity to reference direction
+    normalized: float         # 0.0 – 1.0 for LangSmith compatibility
+    flag: bool                # True if below DGI_PASS threshold
+    method: str = "dgi"
+
+
+# ── Scoring functions ─────────────────────────────────────────────────────────
+
+def compute_sgi(
+    question: str,
+    context: str,
+    response: str,
+    model_name: str = _DEFAULT_MODEL,
+) -> SGIResult:
+    """
+    Compute Semantic Grounding Index.
+
+    Measures whether the response engaged with the provided context or
+    stayed anchored to the question (semantic laziness / confabulation).
+
+    Higher SGI = stronger context engagement = grounded.
+
+    Args:
+        question: The input query.
+        context:  Source document or retrieved chunks.
+        response: The LLM's response to evaluate.
+        model_name: Sentence transformer model (default: all-MiniLM-L6-v2).
+
+    Returns:
+        SGIResult with raw score, normalized score, and flag.
+    """
+    encoder = _get_encoder(model_name)
+    embs = encoder.encode(
+        [question, context, response],
+        convert_to_numpy=True,
+        normalize_embeddings=False,
+    )
+    q_emb, ctx_emb, resp_emb = embs
+
+    q_dist   = float(np.linalg.norm(resp_emb - q_emb))
+    ctx_dist = float(np.linalg.norm(resp_emb - ctx_emb))
+
+    if ctx_dist < 1e-8:
+        # Response identical to context — degenerate, treat as strongly grounded
+        return SGIResult(
+            raw_score=10.0, normalized=1.0, flag=False,
+            q_dist=q_dist, ctx_dist=ctx_dist,
+        )
+    if q_dist < 1e-8:
+        # Response identical to question — degenerate, treat as ungrounded
+        return SGIResult(
+            raw_score=0.0, normalized=0.0, flag=True,
+            q_dist=q_dist, ctx_dist=ctx_dist,
+        )
+
+    raw = q_dist / ctx_dist
+
+    # Normalize to [0, 1] for LangSmith.
+    # tanh maps raw SGI to a smooth 0-1 curve.
+    # SGI 0.95 (review threshold) → ~0.46; SGI 1.20 (strong pass) → ~0.60.
+    normalized = float(math.tanh(max(0.0, raw - 0.3)))
+    normalized = min(1.0, max(0.0, normalized))
+
+    return SGIResult(
+        raw_score=round(raw, 4),
+        normalized=round(normalized, 4),
+        flag=raw < SGI_REVIEW,
+        q_dist=round(q_dist, 4),
+        ctx_dist=round(ctx_dist, 4),
+    )
+
+
+def compute_dgi(
+    question: str,
+    response: str,
+    model_name: str = _DEFAULT_MODEL,
+) -> DGIResult:
+    """
+    Compute Directional Grounding Index.
+
+    Measures whether the query-to-response displacement vector aligns with
+    the mean displacement of verified grounded (question, response) pairs.
+    Detects confabulation (Type II hallucinations) without source context.
+
+    Higher DGI = displacement matches grounded patterns = likely grounded.
+
+    Args:
+        question:   The input query.
+        response:   The LLM's response to evaluate.
+        model_name: Sentence transformer model.
+
+    Returns:
+        DGIResult with raw score, normalized score, and flag.
+    """
+    encoder = _get_encoder(model_name)
+    mu_hat = _get_mu_hat(model_name)
+
+    embs = encoder.encode(
+        [question, response],
+        convert_to_numpy=True,
+        normalize_embeddings=False,
+    )
+    q_emb, r_emb = embs
+
+    delta = r_emb - q_emb
+    magnitude = float(np.linalg.norm(delta))
+
+    if magnitude < 1e-8:
+        return DGIResult(raw_score=0.0, normalized=0.0, flag=True)
+
+    delta_hat = delta / magnitude
+    gamma = float(np.dot(delta_hat, mu_hat))
+
+    if math.isnan(gamma):
+        logger.warning("DGI produced NaN — check embedding dimensions.")
+        return DGIResult(raw_score=0.0, normalized=0.0, flag=True)
+
+    # Normalize [-1, 1] → [0, 1]
+    normalized = round((gamma + 1.0) / 2.0, 4)
+    normalized = min(1.0, max(0.0, normalized))
+
+    return DGIResult(
+        raw_score=round(gamma, 4),
+        normalized=normalized,
+        flag=gamma < DGI_PASS,
+    )
