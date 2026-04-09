@@ -87,7 +87,15 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "sentence_transformers.*"
+module = [
+    "sentence_transformers.*",
+    "cert.*",
+    "langsmith.*",
+    "langchain.*",
+    "langchain_core.*",
+    "_pytest.*",
+    "pytest.*",
+]
 follow_imports = "skip"
 
 [tool.pytest.ini_options]

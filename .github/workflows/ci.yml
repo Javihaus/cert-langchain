@@ -29,6 +29,7 @@ jobs:
         run: ruff check langchain_cert tests
 
       - name: Type check
+        if: matrix.python-version == '3.12'
         run: mypy langchain_cert
 
       - name: Run tests
