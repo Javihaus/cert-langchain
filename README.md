@@ -8,7 +8,7 @@
 
 </div>
 
-# langchain-cert
+# Langchain-Cert
 
 CERT hallucination detection for [LangChain](https://langchain.com) and [LangSmith](https://smith.langchain.com).
 
