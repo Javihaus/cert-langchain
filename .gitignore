@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Build artifacts
+*.egg-info/
+
+# Test credentials — never commit these
+.env.test
+
+# Sentence-transformers model cache (can be 500MB+)
+models/
+sentence_transformers_cache/
