@@ -14,12 +14,16 @@ CERT hallucination detection for [LangChain](https://langchain.com) and [LangSmi
 
 Detects LLM hallucinations using embedding geometry — no second LLM, no external API calls for scoring.
 
-**With context (RAG):** SGI measures whether the response engaged with the source document.  
-**Without context:** DGI measures whether the response displacement vector aligns with grounded patterns.
+**With context (RAG):** Semantic Grounding Index -SGI- measures whether the response engaged with the source document.  
+**Without context:** Directional Grounding Index -DGI- measures whether the response displacement vector aligns with grounded patterns.
 
-[Dashboard](https://cert-framework.com) ·
-[arXiv:2512.13771](https://arxiv.org/abs/2512.13771) ·
-[arXiv:2602.13224](https://arxiv.org/abs/2602.13224)
+[Cert Dashboard](https://cert-framework.com)
+
+## Research
+
+- [A Geometric Taxonomy of Hallucinations in LLMs](https://arxiv.org/pdf/2602.13224)
+- [How Transformers Reject Wrong Answers: Rotational Dynamics of Factual Constraint Processing](https://arxiv.org/abs/2603.13259)
+- [Semantic Grounding Index: Geometric Bounds on Context Engagement in RAG Systems](https://arxiv.org/abs/2512.13771)
 
 ---
 
