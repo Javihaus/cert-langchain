@@ -107,7 +107,7 @@ def _load_bundled_csv() -> list[tuple[str, str]]:
 
     pairs: list[tuple[str, str]] = []
     ref = resources.files("langchain_cert.data").joinpath("reference_pairs.csv")
-    raw = ref.read_text(encoding="utf-8")
+    raw = ref.read_text(encoding="utf-8-sig")
     reader = csv.DictReader(raw.splitlines(), delimiter=";")
     for row in reader:
         q = row.get("question", "").strip()
