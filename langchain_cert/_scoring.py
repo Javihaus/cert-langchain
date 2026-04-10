@@ -103,19 +103,17 @@ def _load_reference_pairs(
 def _load_bundled_csv() -> list[tuple[str, str]]:
     """Load the bundled reference dataset from package data."""
     import csv
-    import io
     from importlib import resources
 
     pairs: list[tuple[str, str]] = []
     ref = resources.files("langchain_cert.data").joinpath("reference_pairs.csv")
     raw = ref.read_text(encoding="utf-8")
-    reader = csv.DictReader(io.StringIO(raw), delimiter=";")
+    reader = csv.DictReader(raw.splitlines(), delimiter=";")
     for row in reader:
         q = row.get("question", "").strip()
-        for col in ("claude_answer", "gemini_answer"):
-            ans = row.get(col, "").strip()
-            if q and ans:
-                pairs.append((q, ans))
+        ans = row.get("grounded_response", "").strip()
+        if q and ans:
+            pairs.append((q, ans))
 
     if not pairs:
         raise ValueError(
