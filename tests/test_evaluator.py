@@ -24,6 +24,8 @@ class TestCERTGroundingEvaluator:
         assert ev.threshold == 0.45
         assert ev.project == "langsmith-evaluation"
         assert ev.api_key is None
+        assert ev.reference_csv is None
+        assert ev.model_name == "all-MiniLM-L6-v2"
 
     def test_evaluate_run_returns_evaluation_result(self):
         from langsmith.evaluation.evaluator import EvaluationResult

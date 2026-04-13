@@ -1,6 +1,5 @@
 <div align="center">
-<img src="data/cert_new_02_26.png" alt="CERT" width="180" />
-  
+
 ![License](https://img.shields.io/badge/license-Apache%202.0-BB3381)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)
 ![PyPI](https://img.shields.io/pypi/v/langchain-cert?color=4FB3B3)
@@ -115,7 +114,7 @@ detection accuracy:
 
 | Calibration | Dataset | Typical AUROC |
 |-------------|---------|---------------|
-| Generic (bundled) | Finance + medical domain responses | ~0.76 |
+| Generic (bundled) | Finance, medical, science, law, coding, and general domains (212 pairs) | ~0.76 |
 | Domain-specific | Your verified production pairs | 0.90 – 0.99 |
 
 The bundled dataset contains finance and medical domain pairs. It works
